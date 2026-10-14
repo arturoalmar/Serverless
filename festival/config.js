@@ -1,0 +1,1 @@
+window.FESTIVAL_API_URL = "";

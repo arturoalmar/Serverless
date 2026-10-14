@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Festival Plano Corto: web estatica, API HTTP, Lambda, DynamoDB y SNS.'
+
+Parameters:
+  NotificationEmail:
+    Type: String
+    Description: Correo que recibira las notificaciones SNS; debera confirmar la suscripcion.
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Timeout: 10
+    MemorySize: 128
+    CodeUri: src/
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref RegistrationsTable
+        TOPIC_ARN: !Ref RegistrationsTopic
+
+Resources:
+  FestivalApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowHeaders:
+          - Content-Type
+        AllowMethods:
+          - POST
+
+  RegistrationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref RegistrationsTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt RegistrationsTopic.TopicName
+      Events:
+        Register:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FestivalApi
+            Path: /registrations
+            Method: POST
+            PayloadFormatVersion: '2.0'
+
+  RegistrationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  RegistrationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Plano Corto · nuevas inscripciones
+
+  RegistrationsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+      TopicArn: !Ref RegistrationsTopic
+
+  FestivalWebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  FestivalWebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FestivalWebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadForFestivalWebsite
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${FestivalWebsiteBucket.Arn}/*'
+
+Outputs:
+  ApiUrl:
+    Description: URL para window.FESTIVAL_API_URL en festival/config.js
+    Value: !Sub 'https://${FestivalApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/prod/registrations'
+  WebsiteBucket:
+    Description: Bucket estatico; contiene solo los archivos de festival/
+    Value: !Ref FestivalWebsiteBucket
+  WebsiteUrl:
+    Description: URL publica del sitio S3 (HTTP; usa CloudFront para HTTPS)
+    Value: !Sub 'http://${FestivalWebsiteBucket}.s3-website-${AWS::Region}.${AWS::URLSuffix}'
+  DynamoDBTable:
+    Value: !Ref RegistrationsTable
+  SNSTopicArn:
+    Value: !Ref RegistrationsTopic
